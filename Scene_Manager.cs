@@ -6,6 +6,36 @@ using UnityEngine.Events;
 using Cysharp.Threading.Tasks;
 using DG.Tweening;
 
+#if UNITY_EDITOR
+using UnityEditor;
+[CustomEditor(typeof(Scene_Manager))]
+public class CustomEdit : Editor
+{
+    string symbol = "UNITASK_DOTWEEN_SUPPORT";
+    public override void OnInspectorGUI()
+    {
+        DrawDefaultInspector();
+
+        if (!Application.isPlaying)
+        {
+            GUILayout.Space(20);
+            symbol = GUILayout.TextField(symbol, GUILayout.Height(20));
+            if (GUILayout.Button("AddScriptingDefine", GUILayout.Height(20)))
+            {
+                if (symbol == "") return;
+                string currentSymbol = PlayerSettings.GetScriptingDefineSymbolsForGroup(EditorUserBuildSettings.selectedBuildTargetGroup);
+                if (currentSymbol.IndexOf(symbol) < 0)
+                {
+                    currentSymbol = currentSymbol + ";" + symbol;
+                    PlayerSettings.SetScriptingDefineSymbolsForGroup(EditorUserBuildSettings.selectedBuildTargetGroup,
+                        currentSymbol);
+                }
+                AssetDatabase.Refresh();
+            }
+        }
+    }
+}
+#endif
 public class Scene_Manager : Singleton.SingletonMonoBehaviour<Scene_Manager>
 {
     public Image backimg;
