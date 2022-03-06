@@ -2,16 +2,16 @@ using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.SceneManagement;
 using System;
-using UnityEngine.Events;
 using Cysharp.Threading.Tasks;
 using DG.Tweening;
 
 #if UNITY_EDITOR
 using UnityEditor;
 [CustomEditor(typeof(Scene_Manager))]
-public class CustomEdit : Editor
+public class Scene_ManagerCustomEdit : Editor
 {
     string symbol = "UNITASK_DOTWEEN_SUPPORT";
+
     public override void OnInspectorGUI()
     {
         DrawDefaultInspector();
@@ -39,21 +39,12 @@ public class CustomEdit : Editor
 public class Scene_Manager : Singleton.SingletonMonoBehaviour<Scene_Manager>
 {
     public Image backimg;
-    public static event UnityAction<string> activeSceneChanging;
-    bool sceneChanging;
+    public bool sceneChanging { get; private set; }
 
     protected override void Awake()
     {
         base.Awake();
-        SceneManager.activeSceneChanged += ActiveSceneChanged;
         DontDestroyOnLoad(this.gameObject);
-    }
-    private void ActiveSceneChanged(Scene thisScene, Scene nextScene)
-    {
-        sceneChanging = false;
-#if UNITY_EDITOR
-        Debug.Log(thisScene.name + "=>" + nextScene.name);
-#endif
     }
 
 #if UNITY_EDITOR
@@ -63,26 +54,24 @@ public class Scene_Manager : Singleton.SingletonMonoBehaviour<Scene_Manager>
     public bool LoadLevelTest(string scene)
     {
         bool update = false;
-        System.Collections.Generic.List<UnityEditor.EditorBuildSettingsScene> buildScenes = new System.Collections.Generic.List<UnityEditor.EditorBuildSettingsScene>(UnityEditor.EditorBuildSettings.scenes);
+        System.Collections.Generic.List<UnityEditor.EditorBuildSettingsScene> buildScenes = 
+            new System.Collections.Generic.List<UnityEditor.EditorBuildSettingsScene>(UnityEditor.EditorBuildSettings.scenes);
         var guids = UnityEditor.AssetDatabase.FindAssets("t:Scene");
         for (int i = 0; i < guids.Length; i++)
         {
             string path = UnityEditor.AssetDatabase.GUIDToAssetPath(guids[i]);
             UnityEditor.SceneAsset sceneAsset = UnityEditor.AssetDatabase.LoadAssetAtPath<UnityEditor.SceneAsset>(path);
-            UnityEditor.EditorBuildSettingsScene buildScene = buildScenes.Find((editorBuildScene) =>
-            {
-                return editorBuildScene.path == path;
-            });
-
+            UnityEditor.EditorBuildSettingsScene buildScene = buildScenes.Find((editorBuildScene) => editorBuildScene.path == path);
             if (sceneAsset.name == scene || sceneAsset.name == SceneManager.GetActiveScene().name)
             {
                 if (buildScene == null)
                 {
                     buildScenes.Add(new UnityEditor.EditorBuildSettingsScene(path, true));
-                    UnityEditor.EditorBuildSettings.scenes = buildScenes.ToArray();
                     Debug.Log("AddToBuild:" + sceneAsset.name);
                 }
-                update = true;
+
+                if (sceneAsset.name == scene)
+                    update = true;
             }
         }
         return update;
@@ -90,21 +79,23 @@ public class Scene_Manager : Singleton.SingletonMonoBehaviour<Scene_Manager>
 #endif
     /// <summary>
     /// âÊñ ëJà⁄
-    /// Scene_Manager.activeSceneChanging += (s) => { BGM_SE_Manager.Instance.bgm_se_setting = _bgm_se_setting; };
-    /// Scene_Manager.LoadLevel("Scene", false);
+    /// Scene_Manager.LoadLevel("Scene", (_async) => { 
+    /// _async.completed += (_async) => { }; 
+    /// });
     /// </summary>
-    /// <param name='scene'>ÉVÅ[Éìñº</param>
-    public static void LoadLevel(string scene, bool Additive)
+    /// <param string='scene'>ÉVÅ[Éìñº</param>
+    /// <param Action='activeSceneChanging'>ÉVÅ[ÉìêÿÇËë÷Ç¶íÜ</param>
+    public static void LoadLevel(string scene, in Action<AsyncOperation> activeSceneChanging)
     {
-        Instance.LoadLevel(scene, 0.5f, true, Additive);
+        Instance.LoadLevel(scene, 0.8f, true, false, activeSceneChanging);
     }
-    public void LoadLevel(string scene, float Loadspeed, bool ResourceUnload, bool Additive)
+    public void LoadLevel(string scene, float Loadspeed, bool ResourceUnload, bool Additive, in Action<AsyncOperation> activeSceneChanging)
     {
+        if (sceneChanging) return;
 #if UNITY_EDITOR
         if (!LoadLevelTest(scene)) return;
 #endif
-        if (!sceneChanging)
-            TransSceneAsync(scene, Loadspeed, ResourceUnload, Additive ? LoadSceneMode.Additive : LoadSceneMode.Single).Forget();
+        TransSceneAsync(scene, Loadspeed, ResourceUnload, Additive ? LoadSceneMode.Additive : LoadSceneMode.Single, activeSceneChanging).Forget();
     }
 
     private bool CreateImage()
@@ -130,45 +121,40 @@ public class Scene_Manager : Singleton.SingletonMonoBehaviour<Scene_Manager>
     /// </summary>
     /// <param name='scene'>ÉVÅ[Éìñº</param>
     /// <param name='interval'>à√ì]Ç…Ç©Ç©ÇÈéûä‘(ïb)</param>
-    private async UniTask TransSceneAsync(string scene, float Loadspeed, bool ResourceUnload, LoadSceneMode loadSceneMode)
+    private async UniTask TransSceneAsync(string scene, float Loadspeed, bool ResourceUnload, LoadSceneMode loadSceneMode, Action<AsyncOperation> activeSceneChanging)
     {
-        // ÉVÅ[ÉìëJà⁄íÜ
-        sceneChanging = true;
+        sceneChanging = true; // ÉVÅ[ÉìëJà⁄íÜ
         AsyncOperation async = SceneManager.LoadSceneAsync(scene, loadSceneMode);
         async.allowSceneActivation = false;
-        
+        async.completed += _ => sceneChanging = false;
+
         if (CreateImage())
         {
             try
             {
-                //ÇæÇÒÇæÇÒà√Ç≠
-                var fade = this.backimg.DOFade(1.0f, 1.0f - Loadspeed);
+                var fade = this.backimg.DOFade(1.0f, 1.0f - Loadspeed); //ÇæÇÒÇæÇÒà√Ç≠
 
                 if (activeSceneChanging != null)
-                    activeSceneChanging(scene);
+                    activeSceneChanging(async);
 
-                //ÉÅÉÇÉäâï˙
-                if (ResourceUnload)
+                if (ResourceUnload) //ÉÅÉÇÉäâï˙
                 {
                     GC.Collect();
                     _ = Resources.UnloadUnusedAssets();
                     GC.Collect();
                 }
-                //ÉMÉäÉMÉäÇ‹Ç≈ë“Ç¬(isDoneÇæÇ∆trueÇ…Ç»ÇÁÇ»Ç¢)
-                await UniTask.WaitUntil(() => async.progress >= 0.9f);
-                //edit / project settings / script compile / Add "UNITASK_DOTWEEN_SUPPORT"
+
                 await fade;
             }
-            catch (Exception ex)
+            catch
             {
-                CancelLoadSceneAsync(async, SceneManager.GetSceneByName(scene)).Forget();
-                throw ex;
+                await CancelLoadSceneAsync(async, SceneManager.GetSceneByName(scene));
             }
         }
-        //ÉVÅ[ÉìëJà⁄Ç∑ÇÈ
-        async.allowSceneActivation = true;
+        async.allowSceneActivation = true; //ÉVÅ[ÉìëJà⁄Ç∑ÇÈ
+        await async;
     }
-    static async UniTask CancelLoadSceneAsync(AsyncOperation loadOperation, Scene loadingScene)
+    private async UniTask CancelLoadSceneAsync(AsyncOperation loadOperation, Scene loadingScene)
     {
         var unloadOperation = SceneManager.UnloadSceneAsync(loadingScene);
         if (unloadOperation == null)
@@ -180,6 +166,7 @@ public class Scene_Manager : Singleton.SingletonMonoBehaviour<Scene_Manager>
                     go.SetActive(false);
                 }
                 unloadOperation = SceneManager.UnloadSceneAsync(loadingScene);
+                sceneChanging = false;
             };
             loadOperation.allowSceneActivation = true;
             await loadOperation;
